@@ -115,7 +115,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo run -p rvbench-tools -- check
 ```
 
-构建产出 `rvbench-tools`；`rvbench` 与别名 `rb-cli` 在 [`rvbench-cli`](https://github.com/rvbench/rvbench-cli) 仓构建，`cargo install --path . --locked` 一次装齐。`rvbench-worker` 在 worker 仓、`rvbench-manager` 在 manager 仓各自构建。公开 spec 仍为 draft，`validate spec ... --require-ready` 返回非零是预期状态：合同合法与完成板上验证是两件事。
+构建产出 `rvbench-tools`；`rvbench` 与别名 `rb-cli` 在 [`rvbench-cli`](https://github.com/rvbench/rvbench-cli) 仓构建，在该仓执行 `cargo install --path . --locked` 一次装齐两个命令。`rvbench-worker` 在 worker 仓、`rvbench-manager` 在 manager 仓各自构建。公开 spec 仍为 draft，`validate spec ... --require-ready` 返回非零是预期状态：合同合法与完成板上验证是两件事。
 
 需要真实 Triton 环境的回归默认跳过：
 

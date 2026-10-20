@@ -1,0 +1,16 @@
+{
+  "request": {
+    "implementation": "triton",
+    "backend": "k1",
+    "kind": "correctness",
+    "op": "add",
+    "shape": [1024, 1024],
+    "dtype": "float32",
+    "seed": 20261017,
+    "warmup": 2,
+    "repetitions": 5,
+    "timeout_secs": 180,
+    "source": "def candidate(a, b):\n    return a + b\n",
+    "attributes": {"suite": "hello-world", "case": "hello-world.add.C01"}
+  }
+}

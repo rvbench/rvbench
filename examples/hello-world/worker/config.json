@@ -1,0 +1,15 @@
+{
+  "listen": "127.0.0.1:18801",
+  "url": "http://127.0.0.1:18801",
+  "worker_id": "hello-world-k1",
+  "board_id": "hello-world-board",
+  "data_dir": "data",
+  "kinds": ["func", "correctness", "performance"],
+  "delivery": "push",
+  "manager": null,
+  "backend": {
+    "backend": "k1",
+    "cc": "cc",
+    "python": "python3"
+  }
+}

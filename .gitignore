@@ -2,6 +2,8 @@ __pycache__/
 *.py[cod]
 spec.hidden.json
 config.json
+!examples/hello-world/worker/config.json
+examples/hello-world/worker/data/
 evald.env
 evald.log
 evald.pid

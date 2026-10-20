@@ -1,0 +1,16 @@
+{
+  "request": {
+    "implementation": "native-c",
+    "backend": "k1",
+    "kind": "correctness",
+    "op": "add",
+    "shape": [1024, 1024],
+    "dtype": "float32",
+    "seed": 20261017,
+    "warmup": 2,
+    "repetitions": 5,
+    "timeout_secs": 180,
+    "source": "void candidate(const float*a,const float*b,float*out,int n){for(int i=0;i<n;i++)out[i]=a[i]+b[i];}\n",
+    "attributes": {"suite": "hello-world", "case": "hello-world.add.C01"}
+  }
+}

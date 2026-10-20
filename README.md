@@ -153,14 +153,16 @@ RVBENCH_TEST_PYTHON=/path/to/venv/bin/python cargo test -p rvbench-worker real_t
 
 ```sh
 rvbench --base http://10.18.60.100:18800 control workers
-rvbench --base http://10.18.60.100:18800 control capabilities
 rvbench --base http://10.18.60.100:18800 control submit examples/job.json --wait
-rvbench --base http://10.18.60.167:18801 control submit request-k1.json --direct --wait
+rvbench --base http://10.18.60.167:18801 worker submit request-k1.json --wait
+rvbench --base http://10.18.60.167:18801 worker capabilities
 rvbench --base http://10.18.60.100:18800 control get JOB_UUID --wait
 rvbench --base http://10.18.60.100:18800 control drain WORKER_ID
 ```
 
 请求示例见 `examples/job.json`（manager 提交）；含候选源的 `k3-native-c.json`、`k1-triton.json` 在协议仓 `examples/` 下。直连 HTTP 的 `POST /jobs` 使用 `{"request": JobRequest}` 包装；查询为 `GET /jobs/{id}?wait=25`。相同 `client_request_id` 与相同摘要复用作业，摘要不同返回 409。
+
+`worker` 子命令组只打 worker：作业文件收裸 `JobRequest` 与 `{"request": ...}` 包装两种；`--wait` 等到终态后，非 `done` 的退出码为 3。
 
 ### 页面
 

@@ -91,7 +91,7 @@ manager 重启继续读取原 epoch 和授予；无需把既有在途执行重�
 
 | 板 | 服务 | 执行角色 | 通道 |
 |---|---|---|---|
-| HUMAN-K3 10.18.60.100 | manager :18800 + worker :18801 | func、correctness | hybrid |
+| HUMAN-K3 10.18.60.100 | manager :18800 + worker :18801 | func、correctness | pull |
 | K3 10.18.60.18 | worker :18801 | performance | push |
 | K1 10.18.60.167 | worker :18801 | func、correctness、performance | pull |
 

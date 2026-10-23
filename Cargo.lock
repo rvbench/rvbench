@@ -849,6 +849,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 
 [[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2479,22 +2489,24 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 [[package]]
 name = "rvbench-cli"
 version = "0.1.0"
-source = "git+https://github.com/rvbench/rvbench-cli.git?rev=31a43fc516244bb216aa54579a05150186d41549#31a43fc516244bb216aa54579a05150186d41549"
+source = "git+https://github.com/rvbench/rvbench-cli.git?rev=e3fc24341c524eecc61bcb59ec08f0119750207f#e3fc24341c524eecc61bcb59ec08f0119750207f"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "flate2",
  "jsonschema",
  "reqwest",
  "rvbench-protocol",
  "serde_json",
+ "tar",
  "uuid",
 ]
 
 [[package]]
 name = "rvbench-protocol"
 version = "0.1.0"
-source = "git+https://github.com/rvbench/rvbench-core-rust.git?rev=52356fe8220762425b5b53926d84b5f118a5a304#52356fe8220762425b5b53926d84b5f118a5a304"
+source = "git+https://github.com/rvbench/rvbench-core-rust.git?rev=6dbacf8d9d24140c6436e08fd8c495ef0b9793bc#6dbacf8d9d24140c6436e08fd8c495ef0b9793bc"
 dependencies = [
  "anyhow",
  "axum",
@@ -2940,6 +2952,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
 ]
 
 [[package]]
@@ -3556,6 +3579,16 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix",
+]
 
 [[package]]
 name = "yoke"

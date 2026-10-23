@@ -40,9 +40,9 @@
         "type": "string",
         "enum": [
           "push",
-          "pull",
-          "hybrid"
-        ]
+          "pull"
+        ],
+        "description": "Per-registration delivery channel. A worker is always capable of both channels, but each registration must declare exactly one: push means the manager posts assignments to the worker url, pull means the worker polls the claim endpoint."
       },
       "JobState": {
         "type": "string",

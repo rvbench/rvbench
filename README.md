@@ -136,7 +136,7 @@ RVBENCH_TEST_PYTHON=/path/to/venv/bin/python cargo test -p rvbench-worker real_t
   "board_id": "k3-100",
   "data_dir": "/home/c4y/.local/share/rvbench/worker",
   "kinds": ["func", "correctness", "performance"],
-  "delivery": "hybrid",              // push | pull | hybrid
+  "delivery": "pull",                // push | pull（每次注册只能选一种）
   "manager": "http://10.18.60.100:18800",
   "backend": { "backend": "k3", "cc": "gcc", "python": "python3", "environment": {}, "cpus": null, "ai_thread": false }
 }
@@ -172,7 +172,7 @@ manager `http://10.18.60.100:18800/ui`，worker `http://板IP:18801/ui`，两端
 
 | 板 | 服务 | 执行角色 | 通道 |
 |---|---|---|---|
-| HUMAN-K3 10.18.60.100 | manager :18800 + worker :18801 | func、correctness | hybrid |
+| HUMAN-K3 10.18.60.100 | manager :18800 + worker :18801 | func、correctness | pull |
 | K3 10.18.60.18 | worker :18801 | performance | push |
 | K1 10.18.60.167 | worker :18801 | func、correctness、performance | pull |
 

@@ -90,7 +90,7 @@ POST /jobs → 准入 → 队列（上限 32，容量 1）→ 编译 → 评估 
 |---|---|---|
 | 输入生成 | 自带 `xorshift32_v1` | Torch RNG，与 suite 容差配套 |
 | 算子 | `add` | 14 个 Triton 算子 + `add`/`abs` 原生 C |
-| 投递 | 仅 push | push / pull / hybrid |
+| 投递 | 仅 push | push / pull |
 | 控制台 | 无 | `/ui` 四标签页 |
 | 重启恢复 | 未完成作业标记中断失败 | 同样标记，另有 outbox 重放 |
 

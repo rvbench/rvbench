@@ -101,6 +101,10 @@ fn repo(root: &Option<PathBuf>) -> PathBuf {
     })
 }
 fn check(root: &Path) -> Result<()> {
+    // Windows 不允许替换正在运行的 exe，而下面的 `cargo test` / `cargo clippy` 会重写
+    // `target/debug/rvbench-tools.exe`：正是当前进程自己。改用独立 target 目录，检查
+    // 不再踩到自己的可执行文件；代价是首次多一遍编译。
+    let target = root.join("target").join("check");
     for args in [
         vec!["fmt", "--all", "--", "--check"],
         vec!["test", "--workspace", "--locked"],
@@ -118,6 +122,7 @@ fn check(root: &Path) -> Result<()> {
             Command::new("cargo")
                 .args(&args)
                 .current_dir(root)
+                .env("CARGO_TARGET_DIR", &target)
                 .status()?
                 .success(),
             "cargo check failed"

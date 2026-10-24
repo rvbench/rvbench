@@ -1,0 +1,893 @@
+# 用户自定义 suite：接口草案（OpenAPI 3.1）
+#
+# 状态：proposal，尚未合入 contracts/api/openapi.json 正本。
+# 落地顺序见 docs/specs/2026-10-24-用户自定义suite-设计与架构.md §10。
+#
+# 归属：
+#   components.schemas  → 主仓 contracts/api/openapi.json#/components/schemas
+#   paths               → rvbench-official-manager/contract/openapi.yaml
+# 共享 schema 引用路径统一为 contracts/api/openapi.json（现有 manager/worker
+# contract 里的 contracts/openapi.json 是过期路径，需一并修正）。
+
+openapi: 3.1.0
+info:
+  title: rvbench user-defined suites
+  version: 1.1.0
+  description: |
+    用户自定义 suite 的发布、执行与结果回收。所有写端点要求
+    Authorization: Bearer <admin_token>；manager 未配置 token 时返回
+    503 suite_api_disabled。读端点沿用 manager v1 的无认证现状。
+
+security: []
+
+paths:
+  /suites:
+    post:
+      operationId: createSuite
+      summary: 创建 suite（不含版本）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSuiteRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuiteSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: suite_id 已存在
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503': { $ref: '#/components/responses/Disabled' }
+    get:
+      operationId: listSuites
+      summary: 列出 suite
+      parameters:
+        - { name: owner, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/SuiteSummary' }
+                  next_cursor: { type: [string, 'null'] }
+
+  /suites/{owner}/{name}:
+    parameters:
+      - { name: owner, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{1,31}$' } }
+      - { name: name, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9][a-z0-9_.-]{1,63}$' } }
+    get:
+      operationId: getSuite
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuiteDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deleteSuite
+      summary: 软删除；存在未完成 run 时 409
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuiteSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: 有未完成 run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503': { $ref: '#/components/responses/Disabled' }
+
+  /suites/{owner}/{name}/versions/{version}:
+    parameters:
+      - { name: owner, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{1,31}$' } }
+      - { name: name, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9][a-z0-9_.-]{1,63}$' } }
+      - { name: version, in: path, required: true, schema: { $ref: '#/components/schemas/SemVer' } }
+    put:
+      operationId: publishSuiteVersion
+      summary: 发布不可变版本（确定性 tar.gz）
+      description: |
+        body 为 application/gzip，根目录直接包含 spec.json 与其余文件。
+        重复发布同 digest 返回 200；同版本不同 digest 返回 409。
+      requestBody:
+        required: true
+        content:
+          application/gzip:
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          description: 已存在，幂等返回
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuiteVersionDetail' }
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuiteVersionDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: 版本已存在且内容不同
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '413':
+          description: 包体超过 16 MiB
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: 包或 spec 校验失败
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationError' }
+        '503': { $ref: '#/components/responses/Disabled' }
+    get:
+      operationId: getSuiteVersion
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuiteVersionDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /suites/{owner}/{name}/versions/{version}/package:
+    parameters:
+      - { name: owner, in: path, required: true, schema: { type: string } }
+      - { name: name, in: path, required: true, schema: { type: string } }
+      - { name: version, in: path, required: true, schema: { $ref: '#/components/schemas/SemVer' } }
+    get:
+      operationId: downloadSuitePackage
+      summary: 下载原始包（审计 / v2 分发）
+      responses:
+        '200':
+          description: Success
+          headers:
+            Digest:
+              schema: { type: string }
+              description: sha-256=<hex>，与 SuiteVersion.package.sha256 一致
+          content:
+            application/gzip:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /suite-runs:
+    post:
+      operationId: submitSuiteRun
+      summary: 展开并提交一次 suite 执行
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SuiteRunRequest' }
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuiteRun' }
+        '400':
+          description: 参数不合法（含 implementation != triton）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: suite 版本不存在
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: digest 不符 / client_request_id 冲突
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: 展开超过上限或 case 不存在
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: 配额或队列上限
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503': { $ref: '#/components/responses/Disabled' }
+    get:
+      operationId: listSuiteRuns
+      parameters:
+        - { name: state, in: query, schema: { $ref: '#/components/schemas/SuiteRunState' } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/SuiteRun' }
+
+  /suite-runs/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getSuiteRun
+      parameters:
+        - { name: wait, in: query, schema: { type: integer, minimum: 0, maximum: 25, default: 0 } }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuiteRun' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: cancelSuiteRun
+      summary: 取消未开始的子 job；已有 running 时 409
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuiteRun' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: 已开始执行
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503': { $ref: '#/components/responses/Disabled' }
+
+  /suite-runs/{id}/results:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getSuiteRunResults
+      summary: 读时转换为 eval_results 1.1.0 形状
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 结构见 contracts/schemas/eval_results.schema.json
+                additionalProperties: true
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: run 尚未进入终态
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+components:
+  responses:
+    Unauthorized:
+      description: admin token 缺失或错误
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Disabled:
+      description: manager 未配置 admin_token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Unknown resource
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    SemVer:
+      type: string
+      pattern: '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+
+    Sha256:
+      type: string
+      pattern: '^[a-f0-9]{64}$'
+
+    SuiteRef:
+      type: object
+      additionalProperties: false
+      required: [suite_id, version, digest]
+      properties:
+        suite_id:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9_-]{1,31}/[a-z0-9][a-z0-9_.-]{1,63}$'
+        version: { $ref: '#/components/schemas/SemVer' }
+        digest: { $ref: '#/components/schemas/Sha256' }
+
+    CreateSuiteRequest:
+      type: object
+      additionalProperties: false
+      required: [suite_id, title]
+      properties:
+        suite_id:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9_-]{1,31}/[a-z0-9][a-z0-9_.-]{1,63}$'
+        title: { type: string, minLength: 1, maxLength: 200 }
+
+    # ---- CaseSpec：内联进 JobRequest.case_spec，worker 的唯一执行依据 ----
+    # 落地时与 JobRequest 同住 contracts/api/openapi.json#/components/schemas。
+
+    CaseSpec:
+      type: object
+      additionalProperties: false
+      required:
+        [case_id, operator_id, suite, target, call, returns, inputs, attrs,
+         outputs, verification, tolerance, candidate, reference, case_contract_sha256]
+      properties:
+        case_id: { type: string, minLength: 1 }
+        operator_id: { type: string, minLength: 1 }
+        suite: { $ref: '#/components/schemas/SuiteRef' }
+        target: { $ref: '#/components/schemas/SuiteTarget' }
+        call: { $ref: '#/components/schemas/CaseCall' }
+        returns:
+          type: object
+          additionalProperties: false
+          required: [kind, names]
+          properties:
+            kind:
+              type: string
+              enum: [tensor, tuple]
+            names:
+              type: array
+              minItems: 1
+              maxItems: 8
+              uniqueItems: true
+              items: { type: string, minLength: 1 }
+        inputs:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/CaseTensorInput'
+              - $ref: '#/components/schemas/CaseNoneInput'
+        attrs:
+          type: object
+          maxProperties: 32
+          additionalProperties:
+            oneOf:
+              - type: [string, number, boolean, 'null']
+              - type: array
+                maxItems: 32
+                items: { type: [string, number, boolean, 'null'] }
+        outputs:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/CaseTensorOutput'
+              - $ref: '#/components/schemas/CasePendingOutput'
+        verification: { $ref: '#/components/schemas/CaseVerification' }
+        tolerance: { $ref: '#/components/schemas/CaseTolerance' }
+        candidate: { $ref: '#/components/schemas/CaseSymbolRef' }
+        reference: { $ref: '#/components/schemas/CaseSymbolRef' }
+        case_contract_sha256: { $ref: '#/components/schemas/Sha256' }
+
+    CaseBinding:
+      type: object
+      additionalProperties: false
+      required: [kind, name]
+      properties:
+        kind:
+          type: string
+          enum: [input, attr]
+        name: { type: string, minLength: 1 }
+
+    CaseCall:
+      type: object
+      additionalProperties: false
+      required: [args, kwargs]
+      properties:
+        args:
+          type: array
+          maxItems: 16
+          items: { $ref: '#/components/schemas/CaseBinding' }
+        kwargs:
+          type: object
+          maxProperties: 16
+          additionalProperties: { $ref: '#/components/schemas/CaseBinding' }
+
+    CaseLayout:
+      type: object
+      additionalProperties: false
+      required: [kind, axes]
+      properties:
+        kind:
+          type: string
+          enum: [contiguous, strided]
+        axes:
+          type: array
+          maxItems: 6
+          items: { type: string, minLength: 1 }
+        strides:
+          type: array
+          maxItems: 6
+          items: { type: integer, minimum: 0 }
+        storage_offset: { type: integer, minimum: 0, default: 0 }
+      allOf:
+        - if:
+            properties:
+              kind: { const: strided }
+          then:
+            required: [strides]
+
+    CaseDtype:
+      type: string
+      enum: [float16, bfloat16, float32, float64, int32, int64, bool]
+
+    CaseGenerator:
+      description: v1 只实现前两种；bernoulli/index/sequence 属 spec 2.2.0，未实现前拒绝
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [kind, seed, low, high]
+          properties:
+            kind: { const: torch_cpu_uniform_v1 }
+            seed: { type: integer, minimum: 0, maximum: 4294967295 }
+            low: { type: number }
+            high: { type: number }
+        - type: object
+          additionalProperties: false
+          required: [kind, value]
+          properties:
+            kind: { const: constant_v1 }
+            value: { type: [number, boolean] }
+
+    CaseTensorInput:
+      type: object
+      additionalProperties: false
+      required: [name, kind, shape, dtype, layout, generator]
+      properties:
+        name: { type: string, minLength: 1 }
+        kind: { const: tensor }
+        shape:
+          type: array
+          maxItems: 6
+          items: { type: integer, minimum: 0, maximum: 16777216 }
+        dtype: { $ref: '#/components/schemas/CaseDtype' }
+        layout: { $ref: '#/components/schemas/CaseLayout' }
+        generator: { $ref: '#/components/schemas/CaseGenerator' }
+
+    CaseNoneInput:
+      type: object
+      additionalProperties: false
+      required: [name, kind]
+      properties:
+        name: { type: string, minLength: 1 }
+        kind: { const: none }
+
+    CaseTensorOutput:
+      type: object
+      additionalProperties: false
+      required: [name, kind, shape, dtype, layout]
+      properties:
+        name: { type: string, minLength: 1 }
+        kind: { const: tensor }
+        shape:
+          type: array
+          maxItems: 6
+          items: { type: integer, minimum: 0, maximum: 16777216 }
+        dtype: { $ref: '#/components/schemas/CaseDtype' }
+        layout: { $ref: '#/components/schemas/CaseLayout' }
+
+    CasePendingOutput:
+      type: object
+      additionalProperties: false
+      required: [name, kind, reason]
+      properties:
+        name: { type: string, minLength: 1 }
+        kind: { const: pending }
+        reason: { type: string, minLength: 1 }
+
+    CaseCheck:
+      type: object
+      additionalProperties: false
+      required: [output, method, contract, reason]
+      properties:
+        output: { type: string, minLength: 1 }
+        method:
+          type: string
+          enum: [exact_values, allclose]
+          description: topk_values/topk_indices/pending 的 case 在 v1 标 skipped
+        contract:
+          type: [object, 'null']
+        reason: { type: [string, 'null'] }
+
+    CaseVerification:
+      type: object
+      additionalProperties: false
+      required: [output_checks, semantic_rules]
+      properties:
+        output_checks:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items: { $ref: '#/components/schemas/CaseCheck' }
+        semantic_rules:
+          type: array
+          description: v1 非空时该 case 标 skipped
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, contract]
+            properties:
+              id: { type: string }
+              contract: { type: [object, 'null'] }
+
+    CaseTolerance:
+      type: object
+      additionalProperties: false
+      required: [atol, rtol, nan_equal, inf_equal]
+      properties:
+        atol: { type: number, minimum: 0, maximum: 1 }
+        rtol: { type: number, minimum: 0, maximum: 1 }
+        nan_equal: { type: boolean }
+        inf_equal: { type: boolean }
+
+    CaseSymbolRef:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [source, python_symbol, adapter]
+          description: adapter 表示参数量换算层，v1 不支持执行；该 case 标 skipped
+        id:
+          type: string
+          description: kind=python_symbol 时必填；前缀限 torch. / torch.nn.functional. / flag_gems.
+      if:
+        properties:
+          kind: { const: python_symbol }
+      then:
+        required: [id]
+
+    SuiteSummary:
+      type: object
+      additionalProperties: false
+      required: [suite_id, title, created_at, deleted_at, versions]
+      properties:
+        suite_id: { type: string }
+        title: { type: string }
+        created_at: { type: string, format: date-time }
+        deleted_at: { type: [string, 'null'], format: date-time }
+        versions:
+          type: array
+          items: { $ref: '#/components/schemas/SuiteVersionSummary' }
+
+    SuiteVersionSummary:
+      type: object
+      additionalProperties: false
+      required: [version, digest, status, case_count, created_at]
+      properties:
+        version: { $ref: '#/components/schemas/SemVer' }
+        digest: { $ref: '#/components/schemas/Sha256' }
+        status:
+          type: string
+          enum: [verified, rejected]
+          description: 上传同步校验，响应中不会出现中间态
+        case_count: { type: integer, minimum: 0, maximum: 512 }
+        created_at: { type: string, format: date-time }
+
+    SuiteDetail:
+      type: object
+      additionalProperties: false
+      required: [suite, versions]
+      properties:
+        suite: { $ref: '#/components/schemas/SuiteSummary' }
+        versions:
+          type: array
+          items: { $ref: '#/components/schemas/SuiteVersionSummary' }
+
+    SuiteTarget:
+      type: object
+      additionalProperties: false
+      required: [architecture, backend, device]
+      properties:
+        architecture: { type: string, minLength: 1 }
+        backend: { type: string, minLength: 1 }
+        device: { type: string, minLength: 1 }
+
+    SuiteCaseEntry:
+      type: object
+      additionalProperties: false
+      required: [case_id, operator_id, op, dtype, shape, runnable_in_v1, skip_reason]
+      properties:
+        case_id: { type: string, minLength: 1 }
+        operator_id: { type: string, minLength: 1 }
+        op:
+          type: string
+          pattern: '^[a-z][a-z0-9_]{0,47}$'
+          description: operator_id 归一化后的投影值
+        dtype:
+          type: string
+          enum: [float16, bfloat16, float32, float64, int32, int64, bool]
+        shape:
+          type: array
+          maxItems: 6
+          items: { type: integer, minimum: 0, maximum: 16777216 }
+        runnable_in_v1: { type: boolean }
+        skip_reason:
+          type: [string, 'null']
+          enum:
+            - null
+            - pending_probe
+            - tolerance_pending
+            - unsupported_check_method
+            - unsupported_candidate_adapter
+            - unsupported_reference_adapter
+            - semantic_rules_unsupported
+            - tensor_too_large
+            - target_mismatch
+
+    SuitePackageFile:
+      type: object
+      additionalProperties: false
+      required: [path, sha256, size_bytes]
+      properties:
+        path: { type: string }
+        sha256: { $ref: '#/components/schemas/Sha256' }
+        size_bytes: { type: integer, minimum: 0 }
+
+    SuiteVersionDetail:
+      type: object
+      additionalProperties: false
+      required:
+        [suite_id, version, digest, spec_sha256, schema_version, status, suite,
+         created_at, created_by, case_count, cases, files, package, errors]
+      properties:
+        suite_id: { type: string }
+        version: { $ref: '#/components/schemas/SemVer' }
+        digest: { $ref: '#/components/schemas/Sha256' }
+        spec_sha256: { $ref: '#/components/schemas/Sha256' }
+        schema_version:
+          type: string
+          enum: [2.0.0, 2.1.0]
+        status:
+          type: string
+          enum: [verified, rejected]
+        suite:
+          type: object
+          additionalProperties: false
+          required: [id, title, kind, target]
+          properties:
+            id: { type: string }
+            title: { type: string }
+            kind:
+              type: string
+              enum: [operator]
+              description: v1 只接受 operator；probe/microarch 返回 422
+            target: { $ref: '#/components/schemas/SuiteTarget' }
+        created_at: { type: string, format: date-time }
+        created_by: { type: string }
+        case_count: { type: integer, minimum: 0, maximum: 512 }
+        cases:
+          type: array
+          items: { $ref: '#/components/schemas/SuiteCaseEntry' }
+        files:
+          type: array
+          items: { $ref: '#/components/schemas/SuitePackageFile' }
+        package:
+          type: object
+          additionalProperties: false
+          required: [sha256, size_bytes]
+          properties:
+            sha256: { $ref: '#/components/schemas/Sha256' }
+            size_bytes: { type: integer, minimum: 0 }
+        errors:
+          type: array
+          items: { type: string }
+
+    SuiteRunRequest:
+      type: object
+      additionalProperties: false
+      required: [suite, backend]
+      properties:
+        suite: { $ref: '#/components/schemas/SuiteRef' }
+        backend:
+          type: string
+          enum: [k1, k3]
+        kinds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          default: [correctness]
+          items:
+            type: string
+            enum: [func, correctness, performance]
+        cases:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, minLength: 1 }
+        implementation:
+          type: string
+          enum: [triton]
+          default: triton
+        sources:
+          type: object
+          description: |
+            键为 spec 的原始 operator_id（不是归一化后的 op）。
+            与 source 同时出现返回 400；未知 operator_id 返回 422。
+          maxProperties: 8
+          additionalProperties: { type: string, maxLength: 1048576 }
+        source:
+          type: string
+          maxLength: 1048576
+          description: 单算子简写；仅当选中 case 同属一个算子时可用
+        warmup: { type: integer, minimum: 0, maximum: 1000, default: 5 }
+        repetitions: { type: integer, minimum: 1, maximum: 1000, default: 20 }
+        timeout_secs: { type: integer, minimum: 1, maximum: 1800, default: 300 }
+        allow_pending: { type: boolean, default: false }
+        require_target_match: { type: boolean, default: true }
+        client_request_id: { type: string, minLength: 1, maxLength: 64 }
+
+    SuiteRunState:
+      type: string
+      enum: [queued, running, completed, partial, failed, canceled]
+
+    SuiteRunProgress:
+      type: object
+      additionalProperties: false
+      required: [queued, running, done, failed, canceled, interrupted]
+      properties:
+        queued: { type: integer, minimum: 0 }
+        running: { type: integer, minimum: 0 }
+        done: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        canceled: { type: integer, minimum: 0 }
+        interrupted: { type: integer, minimum: 0 }
+
+    SuiteRunSummary:
+      type: object
+      additionalProperties: false
+      required: [passed, failed, unverifiable, skipped, error]
+      properties:
+        passed: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        unverifiable: { type: integer, minimum: 0 }
+        skipped: { type: integer, minimum: 0 }
+        error: { type: integer, minimum: 0 }
+
+    SuiteRunJob:
+      type: object
+      additionalProperties: false
+      required: [case_id, kind, job_id, worker_id, state, verdict, reason, median_ms, max_abs_error]
+      properties:
+        case_id: { type: string }
+        kind:
+          type: string
+          enum: [func, correctness, performance]
+        job_id: { type: string, format: uuid }
+        worker_id: { type: [string, 'null'] }
+        state:
+          type: string
+          enum: [queued, running, done, failed, canceled, interrupted, skipped]
+        verdict:
+          type: string
+          enum: [passed, failed, unverifiable, skipped, error]
+        reason: { type: [string, 'null'] }
+        median_ms: { type: [number, 'null'] }
+        max_abs_error: { type: [number, 'null'] }
+
+    SuiteRun:
+      type: object
+      additionalProperties: false
+      required:
+        [run_id, suite, state, backend, implementation, expander_version, kinds,
+         created_at, started_at, finished_at, blocked_reason, case_count, job_count,
+         progress, summary]
+      properties:
+        run_id: { type: string, format: uuid }
+        suite: { $ref: '#/components/schemas/SuiteRef' }
+        state: { $ref: '#/components/schemas/SuiteRunState' }
+        backend:
+          type: string
+          enum: [k1, k3]
+        implementation:
+          type: string
+          enum: [triton]
+        expander_version:
+          type: integer
+          minimum: 1
+          description: 展开器实现版本；同一 suite digest 在不同版本下可能产生不同 case_spec
+        kinds:
+          type: array
+          items:
+            type: string
+            enum: [func, correctness, performance]
+        created_at: { type: string, format: date-time }
+        started_at: { type: [string, 'null'], format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+        blocked_reason:
+          type: [string, 'null']
+          enum: [null, no_capable_worker, worker_capacity_full, awaiting_dependencies]
+        case_count: { type: integer, minimum: 0 }
+        job_count: { type: integer, minimum: 0, maximum: 512 }
+        progress: { $ref: '#/components/schemas/SuiteRunProgress' }
+        summary: { $ref: '#/components/schemas/SuiteRunSummary' }
+        jobs:
+          type: array
+          description: 仅 GET /suite-runs/{id} 返回；列表端点省略
+          items: { $ref: '#/components/schemas/SuiteRunJob' }
+
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - suite_api_disabled
+                - unauthorized
+                - suite_not_found
+                - version_immutable
+                - digest_mismatch
+                - validation_failed
+                - package_too_large
+                - quota_exceeded
+                - user_suites_disabled
+                - unsupported_case
+                - unsupported_suite_kind
+                - run_too_large
+            message: { type: string }
+            details:
+              type: object
+              additionalProperties: true
+
+    ValidationError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code: { const: validation_failed }
+            message: { type: string }
+            details:
+              type: object
+              additionalProperties: false
+              required: [errors]
+              properties:
+                errors:
+                  type: array
+                  maxItems: 50
+                  items: { type: string }

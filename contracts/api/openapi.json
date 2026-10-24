@@ -3,7 +3,7 @@
   "info": {
     "title": "rvbench shared control protocol",
     "version": "1.0.0",
-    "description": "Contract-first wire authority. No authentication. func invokes compiler only; evaluator kinds are correctness and performance."
+    "description": "Contract-first wire authority. Legacy endpoints are anonymous by default; user identity and authorization land via /auth/* (cookie rvb_session or Bearer rvb_…) with paths defined in rvbench-official-manager/contracts/openapi.yaml. Auth error bodies use AuthError; legacy errors stay {error: string}."
   },
   "security": [],
   "paths": {},
@@ -33,7 +33,10 @@
       },
       "KernelImplementation": {
         "type": "string",
-        "enum": ["native-c", "triton"],
+        "enum": [
+          "native-c",
+          "triton"
+        ],
         "description": "Operator implementation, independent of hardware backend. Omission preserves legacy defaults: k1=native-c, k3=triton."
       },
       "DeliveryMode": {
@@ -1206,6 +1209,778 @@
           "error"
         ],
         "additionalProperties": false
+      },
+      "Role": {
+        "type": "string",
+        "enum": [
+          "anonymous",
+          "user",
+          "early_access",
+          "admin",
+          "worker"
+        ],
+        "description": "worker 是机器主体，与用户角色互斥"
+      },
+      "Permission": {
+        "type": "string",
+        "enum": [
+          "public:read",
+          "metrics:read",
+          "job:submit",
+          "job:read:self",
+          "job:read:all",
+          "job:cancel:self",
+          "suite:publish",
+          "suite:run",
+          "suite:read:self",
+          "suite:read:all",
+          "worker:create:self",
+          "worker:create:public",
+          "worker:register",
+          "worker:execute",
+          "worker:manage:self",
+          "worker:manage:all",
+          "session:revoke"
+        ]
+      },
+      "AuthConfigView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled",
+          "provider",
+          "login_url"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "auth.mode != off"
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "github",
+              "oidc",
+              "static",
+              null
+            ]
+          },
+          "display_name": {
+            "type": "string",
+            "description": "如 GitHub"
+          },
+          "login_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "前端跳转地址；enabled=false 时为 null"
+          },
+          "logout_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TokenExchangeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "access_token"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "GitHub OAuth access token（device flow 产物）；static provider 下为 login"
+          }
+        }
+      },
+      "TokenExchangeResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "token",
+          "token_type",
+          "expires_at",
+          "principal"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "pattern": "^rvb_[A-Za-z0-9_-]{40,}$",
+            "description": "只在此响应中出现一次"
+          },
+          "token_type": {
+            "const": "Bearer"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/Principal"
+          }
+        }
+      },
+      "Principal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sub",
+          "login",
+          "roles"
+        ],
+        "properties": {
+          "sub": {
+            "type": "string",
+            "pattern": "^(github:[0-9]+|worker:[A-Za-z0-9_-]{1,64})$",
+            "description": "稳定的 provider 主体标识；login 改名不影响。\nworker:<worker_id> 表示机器主体（provider=worker），与用户角色互斥。\n"
+          },
+          "login": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "github",
+              "oidc",
+              "static",
+              "worker"
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/Role"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "sub": {
+                  "pattern": "^worker:"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "provider": {
+                  "const": "worker"
+                },
+                "roles": {
+                  "contains": {
+                    "const": "worker"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "sub": {
+                  "pattern": "^github:"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "provider": {
+                  "enum": [
+                    "github",
+                    "oidc",
+                    "static"
+                  ]
+                },
+                "roles": {
+                  "not": {
+                    "contains": {
+                      "const": "worker"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "CurrentUser": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "principal",
+          "permissions",
+          "roles_stale",
+          "session"
+        ],
+        "properties": {
+          "principal": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "permissions": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            }
+          },
+          "roles_stale": {
+            "type": "boolean",
+            "description": "provider 校验失败，roles 为降级结果（通常只剩 user）"
+          },
+          "session": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "expires_at"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "web",
+                  "cli"
+                ]
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        }
+      },
+      "SessionView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "created_at",
+          "expires_at",
+          "last_seen",
+          "revoked"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{16}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "web",
+              "cli"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revoked": {
+            "type": "boolean"
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AuditAction": {
+        "type": "string",
+        "enum": [
+          "login",
+          "login_failed",
+          "logout",
+          "job.submit",
+          "job.cancel",
+          "suite.publish",
+          "suite.run",
+          "suite.cancel",
+          "session.revoke",
+          "worker.drain"
+        ]
+      },
+      "AuditEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "at",
+          "action",
+          "result"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sub": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "login": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "action": {
+            "$ref": "#/components/schemas/AuditAction"
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "denied",
+              "error"
+            ]
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AuthError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "unauthenticated",
+                  "forbidden",
+                  "auth_disabled",
+                  "provider_unavailable",
+                  "state_invalid",
+                  "grant_invalid",
+                  "redirect_not_allowed",
+                  "rate_limited"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      },
+      "WorkerVisibility": {
+        "type": "string",
+        "enum": [
+          "private",
+          "public"
+        ],
+        "description": "private 只服务 owner 的 job；public 服务所有 job"
+      },
+      "OwnerRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sub",
+          "login"
+        ],
+        "properties": {
+          "sub": {
+            "type": "string",
+            "pattern": "^(github:[0-9]+|org:[a-z0-9_-]{1,32})$"
+          },
+          "login": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateWorkerRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "worker_id"
+        ],
+        "properties": {
+          "worker_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/WorkerVisibility",
+            "description": "缺省 private；public 仅 admin 可设"
+          }
+        }
+      },
+      "WorkerRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "worker_id",
+          "owner",
+          "visibility",
+          "status",
+          "token_prefix",
+          "created_at"
+        ],
+        "properties": {
+          "worker_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/OwnerRef"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/WorkerVisibility"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "active",
+              "revoked"
+            ],
+            "description": "pending=已创建未注册；active=有心跳；revoked=token 已撤销"
+          },
+          "token_prefix": {
+            "type": "string",
+            "pattern": "^rvbw_[A-Za-z0-9_-]{4}$"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "online": {
+            "type": "boolean",
+            "description": "由 last_seen 推导，非持久字段"
+          }
+        }
+      },
+      "WorkerToken": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "token",
+          "token_prefix",
+          "created_at"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "pattern": "^rvbw_[A-Za-z0-9_-]{40,}$",
+            "description": "只在此响应出现一次"
+          },
+          "token_prefix": {
+            "type": "string",
+            "pattern": "^rvbw_[A-Za-z0-9_-]{4}$"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WorkerCreated": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "worker",
+          "token"
+        ],
+        "properties": {
+          "worker": {
+            "$ref": "#/components/schemas/WorkerRecord"
+          },
+          "token": {
+            "$ref": "#/components/schemas/WorkerToken"
+          }
+        }
+      },
+      "ClaimCode": {
+        "type": "string",
+        "pattern": "^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$",
+        "description": "8 字符短码，去掉 0/O/1/I 以免口述歧义"
+      },
+      "WorkerClaimRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "worker_id",
+          "board_id",
+          "backend",
+          "kinds"
+        ],
+        "properties": {
+          "worker_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "board_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "k1",
+              "k3"
+            ]
+          },
+          "kinds": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "func",
+                "correctness",
+                "performance"
+              ]
+            }
+          },
+          "environment": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "与 WorkerRegistration.environment 同形，供确认页展示"
+          }
+        }
+      },
+      "WorkerClaimChallenge": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "device_code",
+          "verification_url",
+          "expires_in",
+          "interval"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ClaimCode"
+          },
+          "device_code": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{40,64}$"
+          },
+          "verification_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "expires_in": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 600
+          },
+          "interval": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 5
+          }
+        }
+      },
+      "WorkerClaimPoll": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired"
+            ]
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^rvbw_[A-Za-z0-9_-]{40,}$",
+            "description": "仅 status=approved 时存在，且只出现一次"
+          },
+          "worker_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ClaimView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "worker_id",
+          "board_id",
+          "backend",
+          "kinds",
+          "requested_at",
+          "expires_at",
+          "status"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ClaimCode"
+          },
+          "worker_id": {
+            "type": "string"
+          },
+          "board_id": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "k1",
+              "k3"
+            ]
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "func",
+                "correctness",
+                "performance"
+              ]
+            }
+          },
+          "source_ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired"
+            ]
+          }
+        }
+      },
+      "ApproveClaimRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "visibility": {
+            "$ref": "#/components/schemas/WorkerVisibility",
+            "description": "缺省 private；public 仅 admin"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "rvb_",
+        "description": "rvbench session token，形如 rvb_<32B base64url>"
+      },
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "rvb_session",
+        "description": "浏览器会话；HttpOnly、Secure、SameSite=Lax"
       }
     }
   }

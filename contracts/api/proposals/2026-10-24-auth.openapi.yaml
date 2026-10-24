@@ -1,0 +1,859 @@
+# 用户身份与权限：接口草案（OpenAPI 3.1）
+#
+# 状态：proposal，尚未合入 contracts/api/openapi.json 正本。
+# 落地顺序见 docs/specs/2026-10-24-用户身份与权限-设计与架构.md §8。
+#
+# 归属：
+#   components.schemas / securitySchemes → 主仓 contracts/api/openapi.json
+#   paths                                 → rvbench-official-manager/contract/openapi.yaml
+#
+# 认证通道：
+#   浏览器  cookie rvb_session（HttpOnly; Secure; SameSite=Lax）
+#   CLI     Authorization: Bearer rvb_…
+#   worker  Authorization: Bearer <worker_token>（仅 /cluster/*）
+
+openapi: 3.1.0
+info:
+  title: rvbench identity and authorization
+  version: 1.0.0
+  description: |
+    GitHub OAuth 2.0 登录（不是 OIDC；GitHub 无用户级 OIDC），角色由 rvbench 组织
+    团队关系派生。auth.mode=off 时读端点仍可用、写端点按现状放行。
+
+security: []
+
+paths:
+  /auth/config:
+    get:
+      operationId: getAuthConfig
+      summary: 前端需要的非敏感认证配置
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthConfigView' }
+
+  /auth/login:
+    get:
+      operationId: beginLogin
+      summary: 开始浏览器登录，302 到 provider
+      security: []
+      parameters:
+        - name: redirect
+          in: query
+          description: 登录后回跳的**同源相对路径**，如 /ui
+          schema: { type: string, pattern: '^/[^/]', maxLength: 512 }
+      responses:
+        '302':
+          description: 重定向到 provider 授权页
+          headers:
+            Location:
+              schema: { type: string }
+            Set-Cookie:
+              schema: { type: string }
+              description: 写入一次性 state cookie（HttpOnly，10 分钟）
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '503': { $ref: '#/components/responses/AuthDisabled' }
+
+  /auth/callback:
+    get:
+      operationId: finishLogin
+      summary: provider 回调；成功设 session cookie 并回跳
+      security: []
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+      responses:
+        '302':
+          description: |
+            成功：Set-Cookie rvb_session，Location 为 login 时的 redirect 或 /ui。
+            失败：Location 为 /ui?auth_error=<code>。
+          headers:
+            Location:
+              schema: { type: string }
+            Set-Cookie:
+              schema: { type: string }
+        '400':
+          description: state 缺失/过期/已消费
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: provider 不可达
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/github/exchange:
+    post:
+      operationId: exchangeGithubToken
+      summary: CLI 用 GitHub access token 换 rvbench token
+      description: |
+        CLI 走 GitHub device flow 拿到 access token 后调用。manager 校验 token、
+        解析角色、签发 rvb_ token。GitHub token 不会被保存。
+        静态 provider（测试）下 access_token 直接是 login。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TokenExchangeRequest' }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenExchangeResponse' }
+        '401':
+          description: GitHub 拒绝该 token
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '502':
+          description: provider 不可达
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/me:
+    get:
+      operationId: getCurrentUser
+      summary: 当前主体、角色与权限
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: 撤销当前会话
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        '204':
+          description: Revoked
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: 清除 rvb_session（Max-Age=0）
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/sessions:
+    get:
+      operationId: listSessions
+      summary: 自己的会话（不含 token）
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/SessionView' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/sessions/{id}:
+    delete:
+      operationId: revokeSession
+      summary: 撤销会话；自己或 admin
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[a-f0-9]{16}$' }
+          description: 会话 id（token_sha256 前 16 位），不是 token
+      responses:
+        '204':
+          description: Revoked
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /cluster/workers/claim:
+    post:
+      operationId: beginWorkerClaim
+      summary: worker 发起认领，拿到短码与 device_code
+      description: |
+        worker 首次上架、没有 token 时调用。不要求凭据，按 IP 限流，全局待确认上限 20。
+        auth.mode=off 时返回 503（没人能登录确认）。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkerClaimRequest' }
+      responses:
+        '201':
+          description: Challenge created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerClaimChallenge' }
+        '409':
+          description: worker_id 已被占用
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/AuthDisabled' }
+
+  /cluster/workers/claim/{device_code}:
+    parameters:
+      - name: device_code
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9_-]{40,64}$' }
+    get:
+      operationId: pollWorkerClaim
+      summary: worker 轮询认领结果
+      security: []
+      responses:
+        '202':
+          description: 仍待确认
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerClaimPoll' }
+        '200':
+          description: 已批准，token 只在此响应出现一次
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerClaimPoll' }
+        '410':
+          description: 被拒绝或已过期
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerClaimPoll' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /claims:
+    get:
+      operationId: listClaims
+      summary: 待确认的 claim
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ClaimView' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /claims/{code}/approve:
+    parameters:
+      - name: code
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/ClaimCode' }
+    post:
+      operationId: approveClaim
+      summary: 确认把该 worker 绑定到自己名下
+      description: owner 取确认者会话；visibility=public 需要 admin。
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApproveClaimRequest' }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerRecord' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: 已被他人确认或已过期
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /claims/{code}/deny:
+    parameters:
+      - name: code
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/ClaimCode' }
+    post:
+      operationId: denyClaim
+      summary: 拒绝认领
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        '204':
+          description: Denied
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: 已处理
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /workers:
+    post:
+      operationId: createWorker
+      summary: 创建 worker 记录并签发一次性 token
+      description: |
+        人建记录、发 token；机器随后用该 token 走 /cluster/workers/register。
+        visibility=private 时 owner 为调用者；visibility=public 仅 admin，owner 固定 org:rvbench。
+        token 明文只在此响应出现一次。
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateWorkerRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: worker_id 已存在
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    get:
+      operationId: listWorkersOwned
+      summary: 自己的 + public 的 worker；admin 全部
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - { name: visibility, in: query, schema: { $ref: '#/components/schemas/WorkerVisibility' } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/WorkerRecord' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /workers/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+    get:
+      operationId: getWorker
+      summary: worker 记录（不含 token）
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerRecord' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deleteWorker
+      summary: 撤销 worker 与其 token
+      description: 有在途 assignment 时返回 409，先 drain。
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        '204':
+          description: Revoked
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404':
+          description: 不存在，或不是 owner（不暴露存在性）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: 有在途 assignment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /workers/{id}/tokens:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+    post:
+      operationId: rotateWorkerToken
+      summary: 轮换 token；旧 token 立即失效
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerToken' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /auth/audit:
+    get:
+      operationId: queryAudit
+      summary: 审计日志（admin）
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - { name: sub, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { $ref: '#/components/schemas/AuditAction' } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditEntry' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: rvb_
+      description: rvbench session token，形如 rvb_<32B base64url>
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: rvb_session
+      description: 浏览器会话；HttpOnly、Secure、SameSite=Lax
+
+  responses:
+    Unauthenticated:
+      description: 未登录或会话失效
+      headers:
+        WWW-Authenticate:
+          schema: { type: string, enum: ['Bearer'] }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: 已登录但缺权限
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    BadRequest:
+      description: 参数不合法
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Unknown resource
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: 频率超限
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    AuthDisabled:
+      description: auth.mode=off，登录未启用
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Role:
+      type: string
+      enum: [anonymous, user, early_access, admin, worker]
+      description: worker 是机器主体，与用户角色互斥
+
+    Permission:
+      type: string
+      enum:
+        - public:read
+        - metrics:read
+        - job:submit
+        - job:read:self
+        - job:read:all
+        - job:cancel:self
+        - suite:publish
+        - suite:run
+        - suite:read:self
+        - suite:read:all
+        - worker:create:self
+        - worker:create:public
+        - worker:register
+        - worker:execute
+        - worker:manage:self
+        - worker:manage:all
+        - session:revoke
+
+    AuthConfigView:
+      type: object
+      additionalProperties: false
+      required: [enabled, provider, login_url]
+      properties:
+        enabled: { type: boolean, description: auth.mode != off }
+        provider:
+          type: [string, 'null']
+          enum: [github, oidc, static, null]
+        display_name: { type: string, description: 如 GitHub }
+        login_url:
+          type: [string, 'null']
+          description: 前端跳转地址；enabled=false 时为 null
+        logout_url: { type: [string, 'null'] }
+
+    TokenExchangeRequest:
+      type: object
+      additionalProperties: false
+      required: [access_token]
+      properties:
+        access_token:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: GitHub OAuth access token（device flow 产物）；static provider 下为 login
+
+    TokenExchangeResponse:
+      type: object
+      additionalProperties: false
+      required: [token, token_type, expires_at, principal]
+      properties:
+        token:
+          type: string
+          pattern: '^rvb_[A-Za-z0-9_-]{40,}$'
+          description: 只在此响应中出现一次
+        token_type: { const: Bearer }
+        expires_at: { type: string, format: date-time }
+        principal: { $ref: '#/components/schemas/Principal' }
+
+    Principal:
+      type: object
+      additionalProperties: false
+      required: [sub, login, roles]
+      properties:
+        sub:
+          type: string
+          pattern: '^(github:[0-9]+|worker:[A-Za-z0-9_-]{1,64})$'
+          description: |
+            稳定的 provider 主体标识；login 改名不影响。
+            worker:<worker_id> 表示机器主体（provider=worker），与用户角色互斥。
+        login: { type: string }
+        name: { type: [string, 'null'] }
+        avatar_url: { type: [string, 'null'], format: uri }
+        provider:
+          type: string
+          enum: [github, oidc, static, worker]
+        roles:
+          type: array
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/Role' }
+      allOf:
+        - if:
+            properties:
+              sub: { pattern: '^worker:' }
+          then:
+            properties:
+              provider: { const: worker }
+              roles: { contains: { const: worker } }
+        - if:
+            properties:
+              sub: { pattern: '^github:' }
+          then:
+            properties:
+              provider: { enum: [github, oidc, static] }
+              roles: { not: { contains: { const: worker } } }
+
+    CurrentUser:
+      type: object
+      additionalProperties: false
+      required: [principal, permissions, roles_stale, session]
+      properties:
+        principal: { $ref: '#/components/schemas/Principal' }
+        permissions:
+          type: array
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/Permission' }
+        roles_stale:
+          type: boolean
+          description: provider 校验失败，roles 为降级结果（通常只剩 user）
+        session:
+          type: object
+          additionalProperties: false
+          required: [kind, expires_at]
+          properties:
+            kind:
+              type: string
+              enum: [web, cli]
+            expires_at: { type: string, format: date-time }
+
+    SessionView:
+      type: object
+      additionalProperties: false
+      required: [id, kind, created_at, expires_at, last_seen, revoked]
+      properties:
+        id: { type: string, pattern: '^[a-f0-9]{16}$' }
+        kind:
+          type: string
+          enum: [web, cli]
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        last_seen: { type: string, format: date-time }
+        revoked: { type: boolean }
+        user_agent: { type: [string, 'null'] }
+        ip: { type: [string, 'null'] }
+
+    AuditAction:
+      type: string
+      enum:
+        - login
+        - login_failed
+        - logout
+        - job.submit
+        - job.cancel
+        - suite.publish
+        - suite.run
+        - suite.cancel
+        - session.revoke
+        - worker.drain
+
+    AuditEntry:
+      type: object
+      additionalProperties: false
+      required: [id, at, action, result]
+      properties:
+        id: { type: integer, minimum: 1 }
+        at: { type: string, format: date-time }
+        sub: { type: [string, 'null'] }
+        login: { type: [string, 'null'] }
+        action: { $ref: '#/components/schemas/AuditAction' }
+        target: { type: [string, 'null'] }
+        result:
+          type: string
+          enum: [ok, denied, error]
+        ip: { type: [string, 'null'] }
+        detail: { type: [string, 'null'] }
+
+    ClaimCode:
+      type: string
+      pattern: '^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$'
+      description: 8 字符短码，去掉 0/O/1/I 以免口述歧义
+
+    WorkerClaimRequest:
+      type: object
+      additionalProperties: false
+      required: [worker_id, board_id, backend, kinds]
+      properties:
+        worker_id: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+        board_id: { type: string, minLength: 1, maxLength: 64 }
+        backend:
+          type: string
+          enum: [k1, k3]
+        kinds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum: [func, correctness, performance]
+        environment:
+          type: object
+          additionalProperties: true
+          description: 与 WorkerRegistration.environment 同形，供确认页展示
+
+    WorkerClaimChallenge:
+      type: object
+      additionalProperties: false
+      required: [code, device_code, verification_url, expires_in, interval]
+      properties:
+        code: { $ref: '#/components/schemas/ClaimCode' }
+        device_code: { type: string, pattern: '^[A-Za-z0-9_-]{40,64}$' }
+        verification_url: { type: string, format: uri }
+        expires_in: { type: integer, minimum: 1, default: 600 }
+        interval: { type: integer, minimum: 1, default: 5 }
+
+    WorkerClaimPoll:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [pending, approved, denied, expired]
+        token:
+          type: [string, 'null']
+          pattern: '^rvbw_[A-Za-z0-9_-]{40,}$'
+          description: 仅 status=approved 时存在，且只出现一次
+        worker_id: { type: [string, 'null'] }
+
+    ClaimView:
+      type: object
+      additionalProperties: false
+      required: [code, worker_id, board_id, backend, kinds, requested_at, expires_at, status]
+      properties:
+        code: { $ref: '#/components/schemas/ClaimCode' }
+        worker_id: { type: string }
+        board_id: { type: string }
+        backend:
+          type: string
+          enum: [k1, k3]
+        kinds:
+          type: array
+          items: { type: string, enum: [func, correctness, performance] }
+        source_ip: { type: [string, 'null'] }
+        requested_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        status:
+          type: string
+          enum: [pending, approved, denied, expired]
+
+    ApproveClaimRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        visibility:
+          $ref: '#/components/schemas/WorkerVisibility'
+          description: 缺省 private；public 仅 admin
+
+    WorkerVisibility:
+      type: string
+      enum: [private, public]
+      description: private 只服务 owner 的 job；public 服务所有 job
+
+    OwnerRef:
+      type: object
+      additionalProperties: false
+      required: [sub, login]
+      properties:
+        sub:
+          type: string
+          pattern: '^(github:[0-9]+|org:[a-z0-9_-]{1,32})$'
+        login: { type: string }
+
+    CreateWorkerRequest:
+      type: object
+      additionalProperties: false
+      required: [worker_id]
+      properties:
+        worker_id:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{1,64}$'
+        visibility:
+          $ref: '#/components/schemas/WorkerVisibility'
+          description: 缺省 private；public 仅 admin 可设
+
+    WorkerRecord:
+      type: object
+      additionalProperties: false
+      required: [worker_id, owner, visibility, status, token_prefix, created_at]
+      properties:
+        worker_id: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+        owner: { $ref: '#/components/schemas/OwnerRef' }
+        visibility: { $ref: '#/components/schemas/WorkerVisibility' }
+        status:
+          type: string
+          enum: [pending, active, revoked]
+          description: pending=已创建未注册；active=有心跳；revoked=token 已撤销
+        token_prefix: { type: string, pattern: '^rvbw_[A-Za-z0-9_-]{4}$' }
+        created_at: { type: string, format: date-time }
+        last_seen: { type: [string, 'null'], format: date-time }
+        online: { type: boolean, description: 由 last_seen 推导，非持久字段 }
+
+    WorkerToken:
+      type: object
+      additionalProperties: false
+      required: [token, token_prefix, created_at]
+      properties:
+        token:
+          type: string
+          pattern: '^rvbw_[A-Za-z0-9_-]{40,}$'
+          description: 只在此响应出现一次
+        token_prefix: { type: string, pattern: '^rvbw_[A-Za-z0-9_-]{4}$' }
+        created_at: { type: string, format: date-time }
+
+    WorkerCreated:
+      type: object
+      additionalProperties: false
+      required: [worker, token]
+      properties:
+        worker: { $ref: '#/components/schemas/WorkerRecord' }
+        token: { $ref: '#/components/schemas/WorkerToken' }
+
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - unauthenticated
+                - forbidden
+                - auth_disabled
+                - provider_unavailable
+                - state_invalid
+                - grant_invalid
+                - redirect_not_allowed
+                - rate_limited
+            message: { type: string }
+            details:
+              type: object
+              additionalProperties: true

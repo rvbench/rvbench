@@ -1,7 +1,7 @@
 # Manager / worker v1
 
 `rvbench-evald` 的服务入口已更名为 `rvbench-worker`，新增独立 `rvbench-manager`。
-使用 Axum / Tokio。接口没有认证、token 配置或节点名单，任意符合 contract 的 worker 可注册。
+使用 Axum / Tokio。v1 接口无认证；v1.2 起支持可选的用户身份与分级授权（默认 `auth.mode=off`，行为不变，见下「认证」）。
 配置拒绝未知字段。新服务与旧 Python evald 使用不同端口；旧生产进程暂留供迁移。
 
 ## Contract-first
@@ -87,6 +87,43 @@ manager 重启继续读取原 epoch 和授予；无需把既有在途执行重�
 取消仅支持未分配的 manager 队列和 worker 直连未运行任务；运行中取消返回 409。
 未交付而状态不明的分配保留用于人工对账，不因心跳离线释放所有权。
 
+## 认证
+
+v1.2 起支持用户身份与分级授权，默认关闭（`auth.mode=off` 时全部行为与 v1 一致）。
+设计见 [用户身份与权限设计与架构](specs/2026-10-24-用户身份与权限-设计与架构.md)，
+实施记录见 [用户体系实现计划](plans/2026-10-24-用户体系-前后端实现计划.md)。
+
+| 项 | 说明 |
+|---|---|
+| 登录 | GitHub OAuth2：浏览器授权码 + PKCE（`/auth/login` → `/auth/callback`），CLI device flow（`/auth/github/exchange`） |
+| 凭据 | 浏览器 cookie `rvb_session`（HttpOnly、SameSite=Lax，12h 滑动）；CLI `Authorization: Bearer rvb_…`（30d，可撤销） |
+| 角色 | 派生不存储：`user`（登录即得）、`early_access`（rvbench 组织 EarlyAccessDevelopers 团队）、`admin`（配置 `admins[]`，按 `sub` 匹配）；provider 不可达时降级为 `user` 并标记 `roles_stale` |
+| 灰度 | `off` 放行 → `warn` 放行但记 `auth_would_deny` 指标 → `enforce` 按权限表拒绝；业务路由逐条挂 `require()` |
+| 存储 | `data_dir/auth.sqlite`（principals / sessions / role_cache / login_states / audit），与 `manager.sqlite` 单快照分离 |
+| 审计 | login / logout / job.submit / job.cancel / session.revoke 追加记录；`GET /auth/audit`（admin）可查，不记 token 与请求体 |
+
+`/healthz`、`/ui`、`/results`、`/leaderboard` 与 observability 保持匿名可读。
+登录后 `GET /jobs` 只返回自己的（admin 全部）；他人任务详情与取消返回 404，不暴露存在性。
+登录与换 token 端点按 IP 限流；cookie 态写请求校验 Origin/Referer，Bearer 请求不校验。
+
+### worker 凭据（rvbw_）
+
+worker 是独立于用户体系的机器主体（`worker:<id>`，roles=[worker]）。每台一份 `rvbw_` token，
+仅 `/cluster/*` 生效；通道开关独立于 `auth.mode`——`workers` 表或配置 `worker_tokens[]`
+存在任何有效 token 时，`/cluster/*` 立即要求凭据（灰度期两者皆空则维持匿名放行）。
+
+| 操作 | 入口 |
+|---|---|
+| 预置签发 | `rvbench worker manage create --id k3-4`（私有 owner=调用者；`--public` 仅 admin，owner=org:rvbench） |
+| 首次认领 | 板子无 token 启动（`allow_claim=true`）→ 打印 8 位短码 → 浏览器 `GET /claim` 确认 → 板子轮询取 token 落盘 0600 |
+| 轮换 / 撤销 | console「节点管理」tab 或 `POST /workers/{id}/tokens`、`DELETE /workers/{id}`（有在途任务 409） |
+
+调度按归属过滤：私有 worker 只接 owner 的 job；升级前无 owner 的历史 job 只调度到公开 worker。
+`GET /cluster/workers` 匿名只看公开节点且隐去 url；`/results` 聚合中私有 worker 的 worker_id 置空。
+worker 侧配置项 `manager_token`（优先级 env `RVBENCH_WORKER_TOKEN` > `~/.config/rvbench/worker-token` > config），
+401/403 分别提示 token 失效与 worker_id 不匹配。实施记录见
+[worker 认证与权限实现计划](plans/2026-10-24-worker认证与权限-前后端实现计划.md)。
+
 ## 三板部署
 
 | 板 | 服务 | 执行角色 | 通道 |
@@ -134,6 +171,15 @@ rvbench --base http://10.18.60.100:18800 control submit examples/job.json --wait
 rvbench --base http://10.18.60.167:18801 control submit request-k1.json --direct --wait
 rvbench --base http://10.18.60.100:18800 control get JOB_UUID --wait
 rvbench --base http://10.18.60.100:18800 control drain WORKER_ID
+# 认证（enforce 模式下提交前先登录；凭据存 ~/.config/rvbench/credentials）
+rvbench --base http://10.18.60.100:18800 auth login
+rvbench --base http://10.18.60.100:18800 auth status
+rvbench --base http://10.18.60.100:18800 auth logout
+# worker 管理（create 的 token 只显示一次；login 是板上的认领流程）
+rvbench --base http://10.18.60.100:18800 worker manage create --id k3-4
+rvbench --base http://10.18.60.100:18800 worker manage login --worker-id k3-5 --board-id K3-5 --backend k3 --kinds correctness
+rvbench --base http://10.18.60.100:18800 worker manage status
+rvbench --base http://10.18.60.100:18800 worker manage logout
 ```
 
 直连 HTTP 的 POST `/jobs` 使用 `{ "request": JobRequest }` 包装，manager 直接提交 JobRequest。

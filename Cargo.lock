@@ -2489,7 +2489,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 [[package]]
 name = "rvbench-cli"
 version = "0.1.0"
-source = "git+https://github.com/rvbench/rvbench-cli.git?rev=77329289baa0e9b30fa039d97b29b630fcae7733#77329289baa0e9b30fa039d97b29b630fcae7733"
+source = "git+https://github.com/rvbench/rvbench-cli.git?rev=37eaca2035a46aa6f6a174525115631ea546d306#37eaca2035a46aa6f6a174525115631ea546d306"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2507,7 +2507,7 @@ dependencies = [
 [[package]]
 name = "rvbench-protocol"
 version = "0.1.0"
-source = "git+https://github.com/rvbench/rvbench-core-rust.git?rev=a3891e19f189901c6428bfa98c341bdde4d5a04a#a3891e19f189901c6428bfa98c341bdde4d5a04a"
+source = "git+https://github.com/rvbench/rvbench-core-rust.git?rev=86cb916f513aa46b97db557916977c240e6f4486#86cb916f513aa46b97db557916977c240e6f4486"
 dependencies = [
  "anyhow",
  "axum",

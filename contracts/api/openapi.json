@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "rvbench shared control protocol",
-    "version": "1.0.0",
-    "description": "Contract-first wire authority. Legacy endpoints are anonymous by default; user identity and authorization land via /auth/* (cookie rvb_session or Bearer rvb_…) with paths defined in rvbench-official-manager/contracts/openapi.yaml. Auth error bodies use AuthError; legacy errors stay {error: string}."
+    "version": "1.1.0",
+    "description": "Contract-first wire authority. Legacy endpoints are anonymous by default; user identity and authorization land via /auth/* (cookie rvb_session or Bearer rvb_…) with paths defined in rvbench-official-manager/contracts/openapi.yaml. Auth error bodies use AuthError; legacy errors stay {error: string}. 1.1.0 adds the runtime axis: JobRequest.runtime/source_kind/entry/suite/case, WorkerRegistration.contexts/runtimes/slots, RuntimeDecl/ExecutionContext/SlotDecl/RejectReason. implementation is deprecated and maps to spacemit-ep (native-c) or spacemit-triton (triton)."
   },
   "security": [],
   "paths": {},
@@ -37,7 +37,7 @@
           "native-c",
           "triton"
         ],
-        "description": "Operator implementation, independent of hardware backend. Omission preserves legacy defaults: k1=native-c, k3=triton."
+        "description": "已废弃：改用 JobRequest.runtime。保留一年用于双向映射，k1 的 native-c 映射 spacemit-ep，k3 的 triton 映射 spacemit-triton。"
       },
       "DeliveryMode": {
         "type": "string",
@@ -133,6 +133,29 @@
             "type": "object",
             "additionalProperties": true,
             "description": "Opaque user metadata only. Does not change execution or scheduling semantics."
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeRef"
+          },
+          "source_kind": {
+            "$ref": "#/components/schemas/SourceKind"
+          },
+          "entry": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$",
+            "description": "候选源码的入口符号，缺省 candidate。"
+          },
+          "suite": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "判据引用的 suite id。"
+          },
+          "case": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96,
+            "description": "判据引用的 case id。"
           }
         },
         "required": [
@@ -343,6 +366,27 @@
           },
           "observability": {
             "$ref": "#/components/schemas/ObservabilityRegistration"
+          },
+          "contexts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExecutionContext"
+            },
+            "maxItems": 8
+          },
+          "runtimes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDecl"
+            },
+            "maxItems": 16
+          },
+          "slots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SlotDecl"
+            },
+            "maxItems": 64
           }
         },
         "required": [
@@ -989,6 +1033,9 @@
           },
           "error": {
             "type": "string"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeStamp"
           }
         },
         "required": [
@@ -1131,6 +1178,9 @@
             "items": {
               "$ref": "#/components/schemas/RankedResult"
             }
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeStamp"
           }
         },
         "required": [
@@ -1167,6 +1217,14 @@
           },
           "policy": {
             "type": "string"
+          },
+          "group_by": {
+            "type": "string",
+            "enum": [
+              "backend",
+              "runtime"
+            ],
+            "description": "分组维度；缺省为 backend，保持旧榜单口径。"
           }
         },
         "required": [
@@ -1967,6 +2025,293 @@
             "description": "缺省 private；public 仅 admin"
           }
         }
+      },
+      "RuntimeName": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{0,31}$",
+        "description": "Runtime provider 的稳定标识，不带版本。例：spacemit-ep / spacemit-triton / ruyiai-sdk。"
+      },
+      "RuntimeRef": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{0,31}(@[0-9]+\\.[0-9]+(\\.[0-9]+)?)?$",
+        "description": "请求侧的 runtime 选择，可钉 major.minor[.patch]。省略版本表示取槽位声明的默认版本。"
+      },
+      "SourceKind": {
+        "type": "string",
+        "enum": [
+          "c",
+          "python",
+          "triton",
+          "mlir"
+        ],
+        "description": "候选源码的方言。与 runtime 是 N:M 关系：一份 triton 源码可投给多个 runtime。"
+      },
+      "RuntimeOpSupport": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,47}$"
+          },
+          "dtypes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "float32",
+                "float16"
+              ]
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "dtypes"
+        ],
+        "additionalProperties": false
+      },
+      "ExecutionContext": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+          },
+          "cpus": {
+            "type": "string"
+          },
+          "ai_thread": {
+            "type": "boolean"
+          },
+          "cluster": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "description": "worker 上的一组执行上下文（核簇 / 亲和 / AI thread）。context 不参与请求，由 worker 在准入后本地选定。"
+      },
+      "RuntimeIsolation": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "in_process",
+              "subprocess",
+              "venv",
+              "container"
+            ]
+          },
+          "cache": {
+            "type": "string",
+            "enum": [
+              "none",
+              "per_job",
+              "per_runtime"
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "cache"
+        ],
+        "additionalProperties": false
+      },
+      "RuntimeDecl": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/RuntimeName"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          },
+          "source_kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceKind"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "entry": {
+            "type": "object",
+            "properties": {
+              "symbol": {
+                "type": "string"
+              },
+              "abi": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "symbol",
+              "abi"
+            ],
+            "additionalProperties": false
+          },
+          "ops": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "dtypes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "float32",
+                "float16"
+              ]
+            },
+            "uniqueItems": true
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobKind"
+            },
+            "uniqueItems": true
+          },
+          "toolchain": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "isolation": {
+            "$ref": "#/components/schemas/RuntimeIsolation"
+          },
+          "timing_profile": {
+            "type": "string"
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "max_source_bytes": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "max_source_bytes"
+            ],
+            "additionalProperties": false
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "probe_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "at": {
+                "type": "string"
+              },
+              "unavailable_ops": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/RuntimeOpSupport"
+                }
+              }
+            },
+            "required": [
+              "probe_sha256",
+              "at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "source_kinds",
+          "entry",
+          "ops",
+          "dtypes",
+          "ready"
+        ],
+        "additionalProperties": false,
+        "description": "worker 部署的一个软件栈。能力由 probe 产出，不是自报；ready=false 的声明保留在目录里用于报错。"
+      },
+      "SlotDecl": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeName"
+          },
+          "capacity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          }
+        },
+        "required": [
+          "context",
+          "runtime",
+          "capacity"
+        ],
+        "additionalProperties": false,
+        "description": "槽位 = (worker, context, runtime)，是容量与调度的最小单位。"
+      },
+      "RejectReason": {
+        "type": "string",
+        "enum": [
+          "BACKEND_MISMATCH",
+          "KIND_UNSUPPORTED",
+          "RUNTIME_NOT_INSTALLED",
+          "RUNTIME_NOT_READY",
+          "SOURCE_KIND_UNSUPPORTED",
+          "OP_UNSUPPORTED",
+          "DTYPE_UNSUPPORTED",
+          "VERSION_PINNED_MISSING",
+          "ABI_MISMATCH",
+          "TOOLCHAIN_FAILED",
+          "TIMEOUT",
+          "CONTEXT_BUSY"
+        ],
+        "description": "准入拒绝原因。前七类在提交时即可给出，不消耗租约。"
+      },
+      "RuntimeStamp": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "version"
+        ],
+        "additionalProperties": false,
+        "description": "结果上携带的 runtime 归属。version 为 null 表示该值由请求推导、未经观测确认。"
       }
     },
     "securitySchemes": {

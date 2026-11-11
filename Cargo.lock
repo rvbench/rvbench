@@ -2489,7 +2489,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 [[package]]
 name = "rvbench-cli"
 version = "0.1.0"
-source = "git+https://github.com/rvbench/rvbench-cli.git?rev=0ce0c6d#0ce0c6dea8d2dbd8f731dae26137ac0ff82d95f8"
+source = "git+https://github.com/rvbench/rvbench-cli.git?rev=f702f59#f702f59afefbe6625c96433e2f1fc8fcd961855c"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2497,7 +2497,7 @@ dependencies = [
  "flate2",
  "jsonschema",
  "reqwest",
- "rvbench-protocol 0.1.0 (git+https://github.com/rvbench/rvbench-core-rust.git?rev=a32fb34f1f4f4869d9999fd9da573cfbb4208935)",
+ "rvbench-protocol 0.1.0 (git+https://github.com/rvbench/rvbench-core-rust.git?rev=5a8d93872938c1b89ad50cb8e431c5918c27062b)",
  "serde",
  "serde_json",
  "tar",
@@ -2507,7 +2507,7 @@ dependencies = [
 [[package]]
 name = "rvbench-protocol"
 version = "0.1.0"
-source = "git+https://github.com/rvbench/rvbench-core-rust.git?rev=a32fb34#a32fb34f1f4f4869d9999fd9da573cfbb4208935"
+source = "git+https://github.com/rvbench/rvbench-core-rust.git?rev=5a8d938#5a8d93872938c1b89ad50cb8e431c5918c27062b"
 dependencies = [
  "anyhow",
  "axum",
@@ -2526,7 +2526,7 @@ dependencies = [
 [[package]]
 name = "rvbench-protocol"
 version = "0.1.0"
-source = "git+https://github.com/rvbench/rvbench-core-rust.git?rev=a32fb34f1f4f4869d9999fd9da573cfbb4208935#a32fb34f1f4f4869d9999fd9da573cfbb4208935"
+source = "git+https://github.com/rvbench/rvbench-core-rust.git?rev=5a8d93872938c1b89ad50cb8e431c5918c27062b#5a8d93872938c1b89ad50cb8e431c5918c27062b"
 dependencies = [
  "anyhow",
  "axum",
@@ -2553,7 +2553,7 @@ dependencies = [
  "russh",
  "russh-sftp",
  "rvbench-cli",
- "rvbench-protocol 0.1.0 (git+https://github.com/rvbench/rvbench-core-rust.git?rev=a32fb34)",
+ "rvbench-protocol 0.1.0 (git+https://github.com/rvbench/rvbench-core-rust.git?rev=5a8d938)",
  "serde_json",
  "tempfile",
  "tokio",

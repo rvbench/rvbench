@@ -4,7 +4,7 @@
 
 | 文件 | 地位 |
 |---|---|
-| `openapi.json` | 共享 wire 模型的唯一正本。OpenAPI 3.1.0，`info.version` = `1.0.0`，36 个 `components/schemas` 模型，无 `paths` |
+| `openapi.json` | 共享 wire 模型的唯一正本。OpenAPI 3.1.0，`info.version` = `1.2.0`（硬件指标轴），75 个 `components/schemas` 模型，无 `paths` |
 
 里面只有模型，没有端点。HTTP 路径属于各服务自己的 OpenAPI：manager 仓与 worker 仓的 `contract/openapi.yaml`，它们以 YAML 语法的 JSON 文档形式引用本文件。
 

@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "rvbench shared control protocol",
-    "version": "1.1.0",
-    "description": "Contract-first wire authority. Legacy endpoints are anonymous by default; user identity and authorization land via /auth/* (cookie rvb_session or Bearer rvb_…) with paths defined in rvbench-official-manager/contracts/openapi.yaml. Auth error bodies use AuthError; legacy errors stay {error: string}. 1.1.0 adds the runtime axis: JobRequest.runtime/source_kind/entry/suite/case, WorkerRegistration.contexts/runtimes/slots, RuntimeDecl/ExecutionContext/SlotDecl/RejectReason. implementation is deprecated and maps to spacemit-ep (native-c) or spacemit-triton (triton)."
+    "version": "1.2.0",
+    "description": "Contract-first wire authority. Legacy endpoints are anonymous by default; user identity and authorization land via /auth/* (cookie rvb_session or Bearer rvb_…) with paths defined in rvbench-official-manager/contracts/openapi.yaml. Auth error bodies use AuthError; legacy errors stay {error: string}. 1.2.0 adds PhaseResult.hardware (HardwareMetrics/HwCounter/HwDerived/HwTopology/HwScope) and LeaderboardQuery.metric; every field is additive and older workers keep sending PhaseResult without it. 1.1.0 adds the runtime axis: JobRequest.runtime/source_kind/entry/suite/case, WorkerRegistration.contexts/runtimes/slots, RuntimeDecl/ExecutionContext/SlotDecl/RejectReason. implementation is deprecated and maps to spacemit-ep (native-c) or spacemit-triton (triton)."
   },
   "security": [],
   "paths": {},
@@ -196,6 +196,344 @@
         ],
         "additionalProperties": false
       },
+      "HwCounter": {
+        "type": "object",
+        "description": "单个原始计数。event 为 perf 事件名；selector 只在 raw 事件出现（如 0x15），命名事件留空。多簇采集时同一事件按 cluster 各出一条。",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 48,
+            "description": "稳定的扁平字段名（snake_case），报表与 CLI 用它，不用 event。"
+          },
+          "event": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 48,
+            "description": "perf 事件名，如 L1-dcache-loads；无计数器时为 null。"
+          },
+          "selector": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 32,
+            "description": "raw 事件选择子，如 0x15；命名事件为 null。"
+          },
+          "cluster": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 32,
+            "description": "该计数取自哪个 CPU 簇；单簇机型为 null。"
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "计数原值。supported=false 时必须为 null；supported=true 且为 null 表示采集失败。"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 16,
+            "description": "值的单位（count / ns / 空）。"
+          },
+          "supported": {
+            "type": "boolean",
+            "description": "该单元本机是否有可用计数器。false 与 value=0 语义不同。"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 120,
+            "description": "no_counter_on_k3 / semantics_unverified / not_counted / capture_failed 等机器可读原因。"
+          }
+        },
+        "required": [
+          "name",
+          "event",
+          "selector",
+          "cluster",
+          "value",
+          "unit",
+          "supported",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "HwDerived": {
+        "type": "object",
+        "description": "派生指标，全部由 worker 计算（口径唯一）。分母为 0 或采样缺失时为 null。",
+        "properties": {
+          "ipc": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 64,
+            "description": "instructions / cycles。"
+          },
+          "l1d_miss_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "L1-dcache-load-misses / L1-dcache-loads。"
+          },
+          "stall_ratio": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "stalled-cycles-frontend / cycles。在 K3 上实测等同未发射周期，不要按 x86 的 frontend 语义解读。"
+          },
+          "branch_miss_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "branch-misses / branches。"
+          },
+          "core_busy": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "task-clock / 墙钟 × 100%，热力图的热力轴。"
+          }
+        },
+        "required": [
+          "ipc",
+          "l1d_miss_rate",
+          "stall_ratio",
+          "branch_miss_rate",
+          "core_busy"
+        ],
+        "additionalProperties": false
+      },
+      "HwClusterMetrics": {
+        "type": "object",
+        "description": "单个 CPU 簇的派生指标。derived 是跨簇中位数，这里逐簇读数：热力图按簇填充，不必在前端二次相除。",
+        "properties": {
+          "cluster": {
+            "type": "string",
+            "maxLength": 32,
+            "description": "簇 id，与 topology.clusters[].id 对应。"
+          },
+          "derived": {
+            "$ref": "#/components/schemas/HwDerived"
+          }
+        },
+        "required": [
+          "cluster",
+          "derived"
+        ],
+        "additionalProperties": false
+      },
+      "HwScope": {
+        "type": "object",
+        "description": "采样口径。mode=process 表示 perf 计的是被测进程树，不是整机。",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "process",
+              "cgroup"
+            ],
+            "description": "采集范围。"
+          },
+          "cluster": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 32,
+            "description": "首个采样簇 id；多簇时逐条计数自带 cluster。"
+          },
+          "duration_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "单次采集的墙钟长度（毫秒）。"
+          },
+          "samples": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32,
+            "description": "实际完成的采样轮数；budget 用尽时小于请求值。"
+          },
+          "cv_max": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "各派生指标跨轮 CV 的最大值；samples<2 时为 null。"
+          }
+        },
+        "required": [
+          "mode",
+          "cluster",
+          "duration_ms",
+          "samples",
+          "cv_max"
+        ],
+        "additionalProperties": false
+      },
+      "HwTopology": {
+        "type": "object",
+        "description": "采集覆盖的 CPU 拓扑。kind=performance/efficiency 在 K3 上分别是 X100 与 A100 簇。",
+        "properties": {
+          "cpus_total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "本机逻辑 CPU 数。"
+          },
+          "clusters": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 32,
+                  "description": "簇标识，如 X100 / A100。"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "performance",
+                    "efficiency",
+                    "unknown"
+                  ],
+                  "description": "簇类型；未知机型填 unknown。"
+                },
+                "cpus": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "description": "属于该簇的 CPU 编号。"
+                },
+                "sampled": {
+                  "type": "boolean",
+                  "description": "本轮是否真的在该簇上采到数；未采集的簇仍列出，便于前端画灰块。"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "cpus",
+                "sampled"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "cpus_total",
+          "clusters"
+        ],
+        "additionalProperties": false
+      },
+      "HardwareMetrics": {
+        "type": "object",
+        "description": "一次 run 的硬件指标快照，由 worker 采集并派生，manager 与前端只读、不得二次推导。supported=false 表示该单元没有可用计数器（value 必须为 null，不允许用 0 冒充不可测）；value=null 且 supported=true 表示该计数器本次采集失败，原因见 reason。perf 的计数范围是整个被测进程，python runtime 含解释器与框架初始化开销，跨 runtime 比较 ipc 没有意义。",
+        "properties": {
+          "platform": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "采集所在平台标识，如 spacemit-k3。"
+          },
+          "perf_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 96,
+            "description": "perf 二进制版本串；未采到时为 null。"
+          },
+          "kernel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 96,
+            "description": "采集时内核版本（/proc/sys/kernel/osrelease）。"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/HwScope"
+          },
+          "topology": {
+            "$ref": "#/components/schemas/HwTopology"
+          },
+          "counters": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/HwCounter"
+            },
+            "description": "原始计数，逐事件一条；不可测单元以 supported=false 显式列出，便于前端画灰块。"
+          },
+          "derived": {
+            "$ref": "#/components/schemas/HwDerived"
+          },
+          "per_cluster": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "$ref": "#/components/schemas/HwClusterMetrics"
+            },
+            "description": "逐簇派生指标；未采到数的簇不出现在这里。"
+          },
+          "unstable": {
+            "type": "boolean",
+            "description": "重复采样 CV 超阈值；true 时排行榜应排除该条。"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 200,
+            "description": "整体降级原因（perf 缺失、权限不足、超预算等）；正常时为 null。"
+          }
+        },
+        "required": [
+          "platform",
+          "perf_version",
+          "kernel",
+          "scope",
+          "topology",
+          "counters",
+          "derived",
+          "per_cluster",
+          "unstable",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
       "PhaseResult": {
         "type": "object",
         "properties": {
@@ -211,6 +549,9 @@
             "items": {
               "$ref": "#/components/schemas/Artifact"
             }
+          },
+          "hardware": {
+            "$ref": "#/components/schemas/HardwareMetrics"
           }
         },
         "required": [
@@ -218,7 +559,8 @@
           "details",
           "artifacts"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "一个阶段的证据与细节。details 是自由字段（保留给老 worker 的过渡双写）；hardware 是带 schema 的硬件指标快照，缺省为 null 表示未采集。"
       },
       "JobRecord": {
         "type": "object",
@@ -1102,6 +1444,16 @@
           "group_id": {
             "type": "string",
             "maxLength": 64
+          },
+          "metric": {
+            "type": "string",
+            "enum": [
+              "latency",
+              "ipc",
+              "stall_ratio",
+              "l1d_miss_rate"
+            ],
+            "description": "排序口径；缺省 latency 保持历史行为。ipc 降序，stall_ratio/l1d_miss_rate 升序，缺失或 unstable 的条目不参与排名。"
           }
         },
         "required": [],
